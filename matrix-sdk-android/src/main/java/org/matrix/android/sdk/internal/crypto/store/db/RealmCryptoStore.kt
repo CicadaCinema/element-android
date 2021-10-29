@@ -16,6 +16,7 @@
 
 package org.matrix.android.sdk.internal.crypto.store.db
 
+import android.util.Log
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.Transformations
 import androidx.paging.LivePagedListBuilder
@@ -141,6 +142,7 @@ internal class RealmCryptoStore @Inject constructor(
     }
 
     private val lazyRealmConfiguration by lazy {
+        Log.e("!!!", "ensureCryptoMetadataEntity ${Thread.currentThread().name}")
         ensureCryptoMetadataEntity(realmConfiguration)
         realmConfiguration
     }
