@@ -34,6 +34,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import org.matrix.android.sdk.api.auth.UIABaseAuth
 import org.matrix.android.sdk.api.auth.UserInteractiveAuthInterceptor
 import org.matrix.android.sdk.api.auth.UserPasswordAuth
@@ -70,45 +71,22 @@ class HomeActivityViewModel @AssistedInject constructor(
     companion object : MavericksViewModelFactory<HomeActivityViewModel, HomeActivityViewState> by hiltMavericksViewModelFactory()
 
     private var checkBootstrap = false
-    private var onceTrusted = false
 
-    init {
-        cleanupFiles()
-        observeInitialSync()
-        checkSessionPushIsOn()
-        observeCrossSigningReset()
+    override fun handle(action: HomeActivityViewActions) {
+        when (action) {
+            HomeActivityViewActions.PushPromptHasBeenReviewed -> vectorPreferences.setDidAskUserToEnableSessionPush()
+            HomeActivityViewActions.ViewStarted               -> {
+                cleanupFiles()
+                observeInitialSync()
+                checkSessionPushIsOn()
+                observeCrossSigningReset()
+            }
+        }.exhaustive
     }
 
     private fun cleanupFiles() {
         // Mitigation: delete all cached decrypted files each time the application is started.
         activeSessionHolder.getSafeActiveSession()?.fileService()?.clearDecryptedCache()
-    }
-
-    private fun observeCrossSigningReset() {
-        val safeActiveSession = activeSessionHolder.getSafeActiveSession() ?: return
-
-        onceTrusted = safeActiveSession
-                .cryptoService()
-                .crossSigningService().allPrivateKeysKnown()
-
-        safeActiveSession
-                .flow()
-                .liveCrossSigningInfo(safeActiveSession.myUserId)
-                .onEach {
-                    val isVerified = it.getOrNull()?.isTrusted() ?: false
-                    if (!isVerified && onceTrusted) {
-                        // cross signing keys have been reset
-                        // Trigger a popup to re-verify
-                        // Note: user can be null in case of logout
-                        safeActiveSession.getUser(safeActiveSession.myUserId)
-                                ?.toMatrixItem()
-                                ?.let { user ->
-                                    _viewEvents.post(HomeActivityViewEvents.OnCrossSignedInvalidated(user))
-                                }
-                    }
-                    onceTrusted = isVerified
-                }
-                .launchIn(viewModelScope)
     }
 
     private fun observeInitialSync() {
@@ -236,11 +214,34 @@ class HomeActivityViewModel @AssistedInject constructor(
         }
     }
 
-    override fun handle(action: HomeActivityViewActions) {
-        when (action) {
-            HomeActivityViewActions.PushPromptHasBeenReviewed -> {
-                vectorPreferences.setDidAskUserToEnableSessionPush()
+    private fun observeCrossSigningReset() {
+        val safeActiveSession = activeSessionHolder.getSafeActiveSession() ?: return
+
+        viewModelScope.launch {
+            var onceTrusted = withContext(safeActiveSession.coroutineDispatchers.io) {
+                safeActiveSession
+                        .cryptoService()
+                        .crossSigningService().allPrivateKeysKnown()
             }
-        }.exhaustive
+
+            safeActiveSession
+                    .flow()
+                    .liveCrossSigningInfo(safeActiveSession.myUserId)
+                    .onEach {
+                        val isVerified = it.getOrNull()?.isTrusted() ?: false
+                        if (!isVerified && onceTrusted) {
+                            // cross signing keys have been reset
+                            // Trigger a popup to re-verify
+                            // Note: user can be null in case of logout
+                            safeActiveSession.getUser(safeActiveSession.myUserId)
+                                    ?.toMatrixItem()
+                                    ?.let { user ->
+                                        _viewEvents.post(HomeActivityViewEvents.OnCrossSignedInvalidated(user))
+                                    }
+                        }
+                        onceTrusted = isVerified
+                    }
+                    .launchIn(viewModelScope)
+        }
     }
 }
